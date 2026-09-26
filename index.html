@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>二至二分点 日時計算</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-sky-950 text-white min-h-screen flex flex-col items-center p-4">
+<h1 class="text-2xl font-bold mt-4 mb-1 text-sky-300">🌞 二至二分点 日時計算</h1>
+<p class="text-gray-400 mb-4 text-sm">夏至・冬至・春分・秋分の近似日時と日照時間グラフ</p>
+
+<div class="flex gap-3 mb-4 items-center">
+  <label class="text-sm">年:
+    <input type="number" id="year" value="2026" min="1900" max="2100" class="bg-sky-800 rounded px-3 py-2 ml-1 w-24">
+  </label>
+  <label class="text-sm">緯度:
+    <input type="number" id="latitude" value="35.7" min="-90" max="90" step="0.1" class="bg-sky-800 rounded px-3 py-2 ml-1 w-20"> °
+  </label>
+  <button id="btnCalc" class="bg-sky-600 hover:bg-sky-700 px-4 py-2 rounded font-semibold">計算</button>
+</div>
+
+<div id="cards" class="grid grid-cols-2 md:grid-cols-4 gap-3 w-full max-w-3xl mb-4"></div>
+
+<canvas id="sunCanvas" width="700" height="250" class="border border-sky-700 rounded w-full max-w-3xl mb-4">お使いのブラウザはCanvasに対応していません</canvas>
+
+<div class="bg-sky-900 rounded-xl p-4 w-full max-w-3xl text-sm">
+  <h3 class="font-semibold text-sky-300 mb-2">📐 計算方法について</h3>
+  <p class="text-sky-300">スペンサー式を用いた近似計算。太陽赤緯と地球の公転を使った実用的な精度。正確な値はJSTや天文暦を参照してください。</p>
+</div>
+
+<script>
+// Approximate equinox/solstice dates (Jean Meeus algorithm simplified)
+function getSeasonDates(year) {
+  const Y = (year - 2000) / 1000;
+  // JDE0 values from Meeus (Table 27.a)
+  const events = {
+    春分: 2451623.80984 + 365242.37404*Y + 0.05169*Y*Y - 0.00411*Y*Y*Y - 0.00057*Y*Y*Y*Y,
+    夏至: 2451716.56767 + 365241.62603*Y + 0.00325*Y*Y + 0.00888*Y*Y*Y - 0.00030*Y*Y*Y*Y,
+    秋分: 2451810.21715 + 365242.01767*Y - 0.11575*Y*Y + 0.00337*Y*Y*Y + 0.00078*Y*Y*Y*Y,
+    冬至: 2451900.05952 + 365242.74049*Y - 0.06223*Y*Y - 0.00823*Y*Y*Y + 0.00032*Y*Y*Y*Y,
+  };
+  const results = {};
+  for (const [name, jde] of Object.entries(events)) {
+    // Convert JDE to Gregorian date (simplified)
+    const date = jdeToDate(jde);
+    results[name] = date;
+  }
+  return results;
+}
+
+function jdeToDate(jde) {
+  // Julian Day Number to calendar date
+  const z = Math.floor(jde + 0.5);
+  const f = jde + 0.5 - z;
+  let a;
+  if (z < 2299161) {
+    a = z;
+  } else {
+    const alpha = Math.floor((z - 1867216.25) / 36524.25);
+    a = z + 1 + alpha - Math.floor(alpha / 4);
+  }
+  const b = a + 1524;
+  const c = Math.floor((b - 122.1) / 365.25);
+  const d = Math.floor(365.25 * c);
+  const e = Math.floor((b - d) / 30.6001);
+  const day = b - d - Math.floor(30.6001 * e);
+  const month = e < 14 ? e - 1 : e - 13;
+  const year = month > 2 ? c - 4716 : c - 4715;
+  const hour = f * 24;
+  const h = Math.floor(hour);
+  const min = Math.floor((hour - h) * 60);
+  return { year, month, day, hour: h, min };
+}
+
+function daylightHours(lat, doy) {
+  // Simplified formula for daylight duration
+  const latRad = lat * Math.PI / 180;
+  const decl = -23.45 * Math.cos(2 * Math.PI * (doy + 10) / 365) * Math.PI / 180;
+  const cosHA = -Math.tan(latRad) * Math.tan(decl);
+  if (cosHA >= 1) return 0; // polar night
+  if (cosHA <= -1) return 24; // midnight sun
+  const HA = Math.acos(cosHA);
+  return (2 * HA / Math.PI) * 12;
+}
+
+function pad(n) { return String(n).padStart(2, '0'); }
+
+const SEASON_STYLES = {
+  春分: { bg: 'bg-green-900', border: 'border-green-400', icon: '🌸', color: 'text-green-300' },
+  夏至: { bg: 'bg-yellow-900', border: 'border-yellow-400', icon: '☀️', color: 'text-yellow-300' },
+  秋分: { bg: 'bg-orange-900', border: 'border-orange-400', icon: '🍂', color: 'text-orange-300' },
+  冬至: { bg: 'bg-blue-900', border: 'border-blue-400', icon: '❄️', color: 'text-blue-300' },
+};
+
+function calc() {
+  const year = parseInt(document.getElementById('year').value) || 2026;
+  const lat = parseFloat(document.getElementById('latitude').value) || 35.7;
+  const dates = getSeasonDates(year);
+
+  const cards = document.getElementById('cards');
+  cards.innerHTML = '';
+
+  const seasonDoys = {};
+  for (const [name, d] of Object.entries(dates)) {
+    const style = SEASON_STYLES[name];
+    const card = document.createElement('div');
+    card.className = style.bg + ' border ' + style.border + ' rounded-xl p-3 text-center';
+
+    const icon = document.createElement('div');
+    icon.className = 'text-3xl mb-1';
+    icon.textContent = style.icon;
+
+    const title = document.createElement('div');
+    title.className = 'font-bold ' + style.color + ' mb-1';
+    title.textContent = name;
+
+    const date = document.createElement('div');
+    date.className = 'text-white text-sm font-mono';
+    date.textContent = d.year + '/' + pad(d.month) + '/' + pad(d.day);
+
+    const time = document.createElement('div');
+    time.className = 'text-gray-400 text-xs';
+    time.textContent = 'UTC ' + pad(d.hour) + ':' + pad(d.min);
+
+    // Approx DOY
+    const doy = [0,31,59,90,120,151,181,212,243,273,304,334][d.month-1] + d.day;
+    seasonDoys[name] = doy;
+
+    const daylight = daylightHours(lat, doy);
+    const dl = document.createElement('div');
+    dl.className = 'text-xs mt-2 ' + style.color;
+    dl.textContent = '日照: ' + daylight.toFixed(1) + ' 時間';
+
+    [icon, title, date, time, dl].forEach(el => card.appendChild(el));
+    cards.appendChild(card);
+  }
+
+  drawSunChart(year, lat);
+}
+
+function drawSunChart(year, lat) {
+  const canvas = document.getElementById('sunCanvas');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const pad_left = 45, pad_bottom = 30, pad_top = 20;
+  const chartW = W - pad_left - 20;
+  const chartH = H - pad_bottom - pad_top;
+
+  ctx.fillStyle = '#0C1A2E';
+  ctx.fillRect(0, 0, W, H);
+
+  // Calculate max daylight for scale
+  const maxDl = lat > 0 ? daylightHours(lat, 172) : daylightHours(lat, 355);
+
+  // Y axis
+  ctx.strokeStyle = '#334155';
+  ctx.lineWidth = 1;
+  for (let h = 0; h <= 24; h += 4) {
+    const y = pad_top + chartH - (h / 24) * chartH;
+    ctx.beginPath(); ctx.moveTo(pad_left, y); ctx.lineTo(W - 20, y); ctx.stroke();
+    ctx.fillStyle = '#94A3B8';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(h + 'h', pad_left - 3, y + 4);
+  }
+
+  // Monthly labels
+  const monthLabels = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+  monthLabels.forEach((lbl, i) => {
+    const x = pad_left + ((i * 30.5 + 15) / 365) * chartW;
+    ctx.fillStyle = '#64748B';
+    ctx.font = '9px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(lbl, x, H - 8);
+  });
+
+  // Season markers
+  const seasons = getSeasonDates(year);
+  const MARKER_COLORS = { 春分: '#86EFAC', 夏至: '#FDE047', 秋分: '#FB923C', 冬至: '#93C5FD' };
+  for (const [name, d] of Object.entries(seasons)) {
+    const doy = [0,31,59,90,120,151,181,212,243,273,304,334][d.month-1] + d.day;
+    const x = pad_left + (doy / 365) * chartW;
+    ctx.strokeStyle = MARKER_COLORS[name];
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.moveTo(x, pad_top); ctx.lineTo(x, pad_top + chartH); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = MARKER_COLORS[name];
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(name, x, pad_top + 10);
+  }
+
+  // Daylight curve
+  const gradient = ctx.createLinearGradient(pad_left, 0, pad_left + chartW, 0);
+  gradient.addColorStop(0, '#38BDF8');
+  gradient.addColorStop(0.5, '#FDE047');
+  gradient.addColorStop(1, '#38BDF8');
+  ctx.strokeStyle = gradient;
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  for (let doy = 1; doy <= 365; doy++) {
+    const dl = daylightHours(lat, doy);
+    const x = pad_left + (doy / 365) * chartW;
+    const y = pad_top + chartH - (dl / 24) * chartH;
+    if (doy === 1) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  ctx.fillStyle = '#E2E8F0';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('日照時間（時間）', pad_left, pad_top - 5);
+}
+
+document.getElementById('btnCalc').addEventListener('click', calc);
+calc();
+</script>
+</body>
+</html>
